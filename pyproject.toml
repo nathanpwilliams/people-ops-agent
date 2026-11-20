@@ -1,0 +1,9 @@
+[project]
+name = "people-ops-agent"
+version = "0.1.0"
+description = "HR assistant for a fictional company, built directly on the Claude Messages API"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
