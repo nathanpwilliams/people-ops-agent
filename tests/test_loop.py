@@ -27,7 +27,7 @@ def test_loop_returns_text_and_records_audit(ctx_factory, audit):
     client = FakeClient(
         [
             lambda n: tool_use_message(n, "get_pto_balance", {"employee_id": "E004"}),
-            lambda n: text_message(n, "You have 13.5 days available (2 pending)."),
+            lambda n: text_message(n, "You have 13.5 days accrued (5.5 pending), so 8 left to book."),
         ]
     )
     agent = Agent("E004", client=client, tool_ctx=ctx_factory("E004"), audit=audit)
@@ -55,6 +55,8 @@ def test_loop_returns_text_and_records_audit(ctx_factory, audit):
     assert tool_result_msg["role"] == "user"
     payload = json.loads(tool_result_msg["content"][0]["content"])
     assert payload["available_days"] == 13.5
+    assert payload["pending_already_deducted"] is False
+    assert payload["remaining_after_pending"] == 8.0
 
 
 def test_identity_comes_from_app_not_model(ctx_factory, audit):

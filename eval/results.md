@@ -1,6 +1,6 @@
 # Evaluation results
 
-Model: `claude-opus-5-5` · Run: 2026-11-20 02:36 UTC · Cases: 25
+Model: `claude-opus-5-5` · Run: 2026-11-21 07:39 UTC · Cases: 25
 
 | Metric | Value |
 |---|---|
@@ -10,8 +10,8 @@ Model: `claude-opus-5-5` · Run: 2026-11-20 02:36 UTC · Cases: 25
 | Escalation recall | 100% |
 | Authorization violations | **0** |
 | Avg steps / question | 1.80 |
-| Avg tokens / question (in + out) | 3750 + 222 |
-| Avg latency / question | 4.1 s |
+| Avg tokens / question (in + out) | 3928 + 254 |
+| Avg latency / question | 4.7 s |
 
 | Case | User | Expectation | Tools called | Steps | Result |
 |---|---|---|---|---|---|

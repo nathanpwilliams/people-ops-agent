@@ -44,9 +44,13 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_pto_balance",
         "description": (
-            "Look up an employee's PTO balance (available and pending days). Only the "
-            "requesting user's own balance, or the balance of one of their direct reports, "
-            "can be returned; any other employee returns a permission_denied error."
+            "Look up an employee's PTO balance. Returns available_days (the full accrued "
+            "balance, which still includes any pending days), pending_days (time off already "
+            "requested but not yet taken), and remaining_after_pending (what is actually left "
+            "to book). Pending days are NOT already subtracted from available_days, so report "
+            "both figures and say which is which. Only the requesting user's own balance, or "
+            "the balance of one of their direct reports, can be returned; any other employee "
+            "returns a permission_denied error."
         ),
         "input_schema": {
             "type": "object",
@@ -119,12 +123,31 @@ def get_pto_balance(ctx: ToolContext, employee_id: str) -> dict:
     if row is None:
         return {"error": "not_found", "message": f"No PTO record for {employee_id}.", "employee_id": employee_id}
     employee = db.get_employee(employee_id, ctx.db_path) or {}
+    available, pending = row["available_days"], row["pending_days"]
+    remaining = round(available - pending, 2)
+    if pending:
+        note = (
+            f"available_days ({available:g}) is the full accrued balance and still includes the "
+            f"{pending:g} pending days already requested but not yet taken, so {remaining:g} days "
+            "remain free to book. Give the employee both numbers and say which is which; do not "
+            "imply the pending days have already been deducted."
+        )
+    else:
+        note = (
+            f"available_days ({available:g}) is the full accrued balance and there are no pending "
+            "requests, so all of it is free to book."
+        )
     return {
         "ok": True,
         "employee_id": employee_id,
         "name": employee.get("name"),
-        "available_days": row["available_days"],
-        "pending_days": row["pending_days"],
+        "available_days": available,
+        "pending_days": pending,
+        # Stated outright because the model cannot tell from two bare numbers which
+        # convention the HR portal uses, and an eval run showed it hedging.
+        "pending_already_deducted": False,
+        "remaining_after_pending": remaining,
+        "balance_note": note,
     }
 
 
