@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest (offline)
+    runs-on: ubuntu-latest
+
+    env:
+      # Deliberately empty, and no secret is wired into this workflow on purpose.
+      # The suite runs entirely offline against the fake client in tests/conftest.py,
+      # so a test that reaches for the real API fails loudly here instead of passing
+      # quietly on someone's local key.
+      ANTHROPIC_API_KEY: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Only pytest runs in CI. `python -m eval.run` calls the live model and costs real
+      # money (36 cases, roughly a dollar a run), so it stays a deliberate local step --
+      # see the evaluation section of README.md for the committed results.
+      - name: Run offline tests
+        run: pytest

@@ -1,5 +1,7 @@
 # People Ops Agent
 
+[![tests](https://github.com/nathanpwilliams/people-ops-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/nathanpwilliams/people-ops-agent/actions/workflows/tests.yml)
+
 An HR assistant for a fictional 12-person company, Northwind Robotics. It answers employee questions from the company handbook, looks up PTO balances and creates onboarding checklists with permission checks enforced in code, and hands sensitive topics to a human. Built directly on the Claude Messages API with no agent framework, so every part of the loop is small enough to read in one sitting.
 
 All company data is invented. There are no real people or real employee records anywhere in this repo.
