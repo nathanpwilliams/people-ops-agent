@@ -19,6 +19,20 @@ def can_view_pto(requesting_user_id: str, target_employee_id: str, db_path: Path
     return target is not None and target["manager_id"] == requesting_user_id
 
 
+def can_create_onboarding_checklist(
+    requesting_user_id: str, target_employee_id: str, db_path: Path = DB_PATH
+) -> bool:
+    """Only the new hire's own manager may create their checklist.
+
+    Deliberately narrower than `can_view_pto`: there is no self case (you do not onboard
+    yourself) and no skip-level case (a manager two levels up is not the one doing it).
+    """
+    if requesting_user_id == target_employee_id:
+        return False
+    target = db.get_employee(target_employee_id, db_path)
+    return target is not None and target["manager_id"] == requesting_user_id
+
+
 def visible_employee_ids(requesting_user_id: str, db_path: Path = DB_PATH) -> set[str]:
     """Every employee whose PTO the requesting user is allowed to see."""
     ids = {requesting_user_id}

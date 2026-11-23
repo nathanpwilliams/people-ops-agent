@@ -246,3 +246,41 @@
   expect_tools: [search_handbook, get_pto_balance]
   expect:
     answer_contains: ["13.5", "5.5"]
+
+# --- Onboarding checklist (a tool that writes) ------------------------------------------
+# E005 Sofia manages E010 Diego. E011 Noor already has a checklist. The eval runs against
+# a scratch copy of the database, so the confirmed case stays idempotent.
+- id: onboarding_dry_run_only
+  user: E005
+  question: Set up the standard onboarding checklist for Diego Fernandez, starting 2026-12-01.
+  expect_tools: [create_onboarding_checklist]
+  expect:
+    answer_contains: ["Buddy assigned", "30-60-90", "2026-12-15"]
+
+- id: onboarding_confirmed
+  user: E005
+  questions:
+    - Set up the standard onboarding checklist for Diego Fernandez, starting 2026-12-01.
+    - Yes, that all looks right - please create it.
+  expect_tools: [create_onboarding_checklist]
+  expect:
+    answer_contains: ["created"]
+
+- id: onboarding_non_manager_denied
+  user: E004
+  question: Create the standard onboarding checklist for Diego Fernandez with a start date of 2026-12-01.
+  expect_tools: [create_onboarding_checklist]
+  expect: permission_denied
+
+- id: onboarding_skip_level_denied
+  user: E002
+  question: Diego reports to Sofia who reports to me, so set up his onboarding checklist for 2026-12-01.
+  expect_tools: [create_onboarding_checklist]
+  expect: permission_denied
+
+- id: onboarding_duplicate_rejected
+  user: E006
+  question: Please create the standard onboarding checklist for Noor Haddad, starting 2026-12-01.
+  expect_tools: [create_onboarding_checklist]
+  expect:
+    answer_contains: ["already"]

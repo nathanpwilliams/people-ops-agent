@@ -1,17 +1,37 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
 from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
 
 from agent.audit import AuditLog
+from agent.config import DB_PATH
 from agent.tools import ToolContext
 
 
 @pytest.fixture
 def outbox(tmp_path: Path) -> Path:
     return tmp_path / "outbox"
+
+
+@pytest.fixture
+def writable_db(tmp_path: Path) -> Path:
+    """A throwaway copy of the seeded database, for tools that write."""
+    target = tmp_path / "company.db"
+    shutil.copy(DB_PATH, target)
+    return target
+
+
+@pytest.fixture
+def rw_ctx_factory(outbox: Path, writable_db: Path):
+    """Like ctx_factory, but pointed at a copy so a test can never touch data/company.db."""
+
+    def make(user: str) -> ToolContext:
+        return ToolContext(requesting_user_id=user, outbox_dir=outbox, db_path=writable_db)
+
+    return make
 
 
 @pytest.fixture

@@ -8,12 +8,13 @@ from __future__ import annotations
 import json
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import db, permissions
 from .config import DB_PATH, HANDBOOK_DIR, OUTBOX_DIR
 from .handbook import get_index
+from .onboarding import standard_checklist
 
 ESCALATION_CATEGORIES = (
     "compensation",
@@ -86,6 +87,40 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["category", "summary"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "name": "create_onboarding_checklist",
+        "description": (
+            "Create the standard onboarding checklist (Onboarding §6) for a new hire, with "
+            "due dates derived from their start date. Only the new hire's own direct manager "
+            "may do this; anyone else returns a permission_denied error. Call with "
+            "confirm=false first to get a preview that creates nothing, show the employee "
+            "the tasks and dates, and only call again with confirm=true once they have "
+            "explicitly asked you to create it. Returns an error if a checklist already exists."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "employee_id": {
+                    "type": "string",
+                    "description": "Employee id of the new hire, such as E011.",
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "The new hire's start date as an ISO date, YYYY-MM-DD.",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "false returns a dry-run preview and writes nothing. true creates the "
+                        "tasks. Only pass true after the user has explicitly confirmed."
+                    ),
+                },
+            },
+            "required": ["employee_id", "start_date", "confirm"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -182,10 +217,82 @@ def escalate_to_human(ctx: ToolContext, category: str, summary: str) -> dict:
     }
 
 
+def create_onboarding_checklist(
+    ctx: ToolContext, employee_id: str, start_date: str, confirm: bool
+) -> dict:
+    employee_id = (employee_id or "").strip().upper()
+    # Permission first, so an unauthorized caller learns nothing -- not even whether a
+    # checklist already exists or whether the date was valid.
+    if not permissions.can_create_onboarding_checklist(
+        ctx.requesting_user_id, employee_id, ctx.db_path
+    ):
+        return {
+            "error": "permission_denied",
+            "message": (
+                f"Only {employee_id}'s own direct manager may create their onboarding "
+                f"checklist, and {ctx.requesting_user_id} is not. Do not create or describe "
+                "a checklist for this employee."
+            ),
+            "employee_id": employee_id,
+        }
+
+    try:
+        start = date.fromisoformat((start_date or "").strip())
+    except ValueError:
+        return {
+            "error": "invalid_input",
+            "message": f"start_date must be an ISO date like 2026-01-05; got {start_date!r}.",
+            "employee_id": employee_id,
+        }
+
+    existing = db.onboarding_tasks(employee_id, ctx.db_path)
+    if existing:
+        return {
+            "error": "checklist_exists",
+            "message": (
+                f"{employee_id} already has an onboarding checklist with {len(existing)} tasks. "
+                "Creating another would duplicate it; ask People Ops to amend the existing one."
+            ),
+            "employee_id": employee_id,
+            "existing_task_count": len(existing),
+        }
+
+    employee = db.get_employee(employee_id, ctx.db_path) or {}
+    tasks = standard_checklist(start)
+    if not confirm:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "employee_id": employee_id,
+            "name": employee.get("name"),
+            "start_date": start.isoformat(),
+            "task_count": len(tasks),
+            "tasks": tasks,
+            "message": (
+                f"Preview only -- nothing has been created. Show these {len(tasks)} tasks and "
+                "their due dates to the user, then call again with confirm=true if they agree."
+            ),
+        }
+
+    task_ids = db.insert_onboarding_tasks(employee_id, tasks, ctx.db_path)
+    return {
+        "ok": True,
+        "dry_run": False,
+        "employee_id": employee_id,
+        "name": employee.get("name"),
+        "start_date": start.isoformat(),
+        "task_count": len(task_ids),
+        "created_task_ids": task_ids,
+        "tasks": tasks,
+        "message": f"Created {len(task_ids)} onboarding tasks for {employee.get('name') or employee_id}.",
+    }
+
+
 _IMPLEMENTATIONS = {
     "search_handbook": search_handbook,
     "get_pto_balance": get_pto_balance,
     "escalate_to_human": escalate_to_human,
+    "create_onboarding_checklist": create_onboarding_checklist,
 }
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import statistics
 import sys
 import tempfile
@@ -157,9 +158,14 @@ def grade(case: dict, result: TurnResult, violations: list[str]) -> tuple[bool, 
     return False, f"unknown expectation {expect!r}"
 
 
-def run_case(case: dict, audit_path: Path, outbox_dir: Path) -> dict:
+def run_case(case: dict, audit_path: Path, outbox_dir: Path, db_dir: Path) -> dict:
     user = case["user"]
-    ctx = ToolContext(requesting_user_id=user, outbox_dir=outbox_dir)
+    # Each case gets its own copy of the database. create_onboarding_checklist writes, so
+    # a shared copy would couple cases to each other's order -- two cases touching the same
+    # new hire would race, and the run would leave data/company.db dirty either way.
+    case_db = db_dir / f"{case['id']}.db"
+    shutil.copy(DB_PATH, case_db)
+    ctx = ToolContext(requesting_user_id=user, outbox_dir=outbox_dir, db_path=case_db)
     questions = case_questions(case)
     result, answers = run_conversation(case, ctx, audit_path)
 
@@ -304,13 +310,17 @@ def main(argv: list[str] | None = None) -> int:
         print("No cases to run.", file=sys.stderr)
         return 2
 
-    # Escalations filed during the eval go to a scratch outbox, not the real one.
-    outbox_dir = Path(tempfile.mkdtemp(prefix="people-ops-eval-"))
+    # Escalations filed during the eval go to a scratch outbox, not the real one, and each
+    # case gets its own copy of the database under scratch/db.
+    scratch = Path(tempfile.mkdtemp(prefix="people-ops-eval-"))
+    outbox_dir = scratch / "outbox"
+    db_dir = scratch / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
     audit_path = Path("logs") / "eval_audit.jsonl"
     print(f"Running {len(cases)} cases with {args.workers} worker(s) against {MODEL} ...")
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        rows = list(pool.map(lambda c: run_case(c, audit_path, outbox_dir), cases))
+        rows = list(pool.map(lambda c: run_case(c, audit_path, outbox_dir, db_dir), cases))
 
     summary = summarize(rows)
     print_table(rows, summary)

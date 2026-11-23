@@ -1,4 +1,8 @@
-"""Thin read-only helpers over the SQLite company database."""
+"""Thin helpers over the SQLite company database.
+
+Reads are unrestricted; the only write is `insert_onboarding_tasks`, which the
+onboarding tool calls after its permission and duplicate checks have passed.
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -41,3 +45,29 @@ def get_pto_balance(employee_id: str, db_path: Path = DB_PATH) -> dict | None:
         (employee_id,),
     )
     return rows[0] if rows else None
+
+
+def onboarding_tasks(employee_id: str, db_path: Path = DB_PATH) -> list[dict]:
+    return _rows(
+        db_path,
+        "SELECT * FROM onboarding_tasks WHERE employee_id = ? ORDER BY due_date, id",
+        (employee_id,),
+    )
+
+
+def insert_onboarding_tasks(employee_id: str, tasks: list[dict], db_path: Path = DB_PATH) -> list[int]:
+    """Insert tasks for one employee in a single transaction and return the new row ids."""
+    conn = connect(db_path)
+    try:
+        with conn:
+            ids = [
+                conn.execute(
+                    "INSERT INTO onboarding_tasks (employee_id, task, owner, due_date, status)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (employee_id, t["task"], t["owner"], t["due_date"], t.get("status", "open")),
+                ).lastrowid
+                for t in tasks
+            ]
+        return ids
+    finally:
+        conn.close()
