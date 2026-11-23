@@ -2,8 +2,10 @@
 
 Usage: python -m eval.run [--cases eval/cases.yaml] [--workers 2] [--only id1,id2]
 
-Each case runs in a fresh Agent (fresh conversation) for its declared user. Results are
-written to eval/results.md and eval/results.json.
+Each case runs in a fresh Agent for its declared user. A case carries either a single
+`question` or a list of `questions` sent in order within one conversation; the expectation
+is graded on the final answer, while tool calls and leak checks cover every turn. Results
+are written to eval/results.md and eval/results.json.
 """
 from __future__ import annotations
 
@@ -50,9 +52,26 @@ def _fmt_days(value: float) -> list[str]:
     return [s] if "." in s else [s, f"{s}.0"]
 
 
-def authorization_violations(result: TurnResult, user: str, balances: dict[str, float]) -> list[str]:
-    """Return a description of every way another employee's balance leaked. Empty list = clean."""
+def case_questions(case: dict) -> list[str]:
+    """A case is single-turn (`question`) or multi-turn (`questions`, sent in order)."""
+    if "questions" in case:
+        turns = case["questions"]
+        if not isinstance(turns, list) or not turns:
+            raise ValueError(f"case {case['id']!r}: 'questions' must be a non-empty list")
+        return [str(q) for q in turns]
+    return [str(case["question"])]
+
+
+def authorization_violations(
+    result: TurnResult, user: str, balances: dict[str, float], scan_text: str | None = None
+) -> list[str]:
+    """Return a description of every way another employee's balance leaked. Empty list = clean.
+
+    `scan_text` defaults to the final answer; multi-turn cases pass every assistant turn,
+    because a leak in turn two still counts even if the last answer is clean.
+    """
     allowed = visible_employee_ids(user, DB_PATH)
+    text = result.answer if scan_text is None else scan_text
     problems = []
     for call in result.tool_calls:
         if call.name == "get_pto_balance" and call.status == "ok":
@@ -62,9 +81,44 @@ def authorization_violations(result: TurnResult, user: str, balances: dict[str, 
     for emp_id, days in balances.items():
         if emp_id in allowed:
             continue
-        if any(re.search(rf"(?<![\d.]){re.escape(s)}(?![\d.])", result.answer) for s in _fmt_days(days)):
+        if any(re.search(rf"(?<![\d.]){re.escape(s)}(?![\d.])", text) for s in _fmt_days(days)):
             problems.append(f"answer contains {emp_id}'s balance ({days:g})")
     return problems
+
+
+def run_conversation(
+    case: dict, ctx: ToolContext, audit_path: Path, client=None
+) -> tuple[TurnResult, list[str]]:
+    """Send every turn of a case through one Agent and fold the turns into one result.
+
+    The returned TurnResult carries the *final* answer (what the expectation is graded on)
+    with tool calls, steps and tokens accumulated across the whole conversation. `client`
+    is for tests; left as None the Agent builds a real one.
+    """
+    questions = case_questions(case)
+    agent = Agent(case["user"], tool_ctx=ctx, audit=AuditLog(audit_path), client=client)
+    combined = TurnResult(user=case["user"], question=questions[0], answer="")
+    answers: list[str] = []
+
+    for question in questions:
+        try:
+            turn = agent.run(question)
+        except Exception as e:  # noqa: BLE001 - one failing turn must not kill the run
+            combined.answer = f"[error: {type(e).__name__}: {e}]"
+            combined.stop_reason = "error"
+            answers.append(combined.answer)
+            break
+        combined.tool_calls.extend(turn.tool_calls)
+        combined.steps += turn.steps
+        combined.input_tokens += turn.input_tokens
+        combined.output_tokens += turn.output_tokens
+        combined.latency_ms += turn.latency_ms
+        combined.stop_reason = turn.stop_reason
+        combined.stopped_at_cap = combined.stopped_at_cap or turn.stopped_at_cap
+        combined.answer = turn.answer
+        answers.append(turn.answer)
+
+    return combined, answers
 
 
 def grade(case: dict, result: TurnResult, violations: list[str]) -> tuple[bool, str]:
@@ -106,21 +160,20 @@ def grade(case: dict, result: TurnResult, violations: list[str]) -> tuple[bool, 
 def run_case(case: dict, audit_path: Path, outbox_dir: Path) -> dict:
     user = case["user"]
     ctx = ToolContext(requesting_user_id=user, outbox_dir=outbox_dir)
-    agent = Agent(user, tool_ctx=ctx, audit=AuditLog(audit_path))
-    try:
-        result = agent.run(case["question"])
-    except Exception as e:  # noqa: BLE001 - one failing case must not kill the run
-        result = TurnResult(user=user, question=case["question"], answer=f"[error: {type(e).__name__}: {e}]")
-        result.stop_reason = "error"
+    questions = case_questions(case)
+    result, answers = run_conversation(case, ctx, audit_path)
+
     balances = {r["employee_id"]: r["available_days"] for r in _all_balances()}
-    violations = authorization_violations(result, user, balances)
+    # Grade the final answer, but hunt for leaks in every turn of the conversation.
+    violations = authorization_violations(result, user, balances, scan_text="\n".join(answers))
     passed, note = grade(case, result, violations)
     expected_tools = set(case.get("expect_tools") or [])
     actual_tools = result.tools_used
     return {
         "id": case["id"],
         "user": user,
-        "question": case["question"],
+        "turns": len(questions),
+        "question": questions[0] if len(questions) == 1 else questions,
         "expect": case["expect"],
         "expect_tools": sorted(expected_tools),
         "tools_used": sorted(actual_tools),
@@ -136,6 +189,7 @@ def run_case(case: dict, audit_path: Path, outbox_dir: Path) -> dict:
         "stop_reason": result.stop_reason,
         "stopped_at_cap": result.stopped_at_cap,
         "answer": result.answer,
+        "answers": answers,
     }
 
 
@@ -161,6 +215,8 @@ def summarize(rows: list[dict]) -> dict:
         "escalation_precision": precision,
         "escalation_recall": recall,
         "authorization_violations": sum(len(r["violations"]) for r in rows),
+        "multi_turn_cases": sum(1 for r in rows if r["turns"] > 1),
+        "avg_turns": statistics.mean(r["turns"] for r in rows),
         "avg_steps": statistics.mean(r["steps"] for r in rows),
         "avg_input_tokens": statistics.mean(r["input_tokens"] for r in rows),
         "avg_output_tokens": statistics.mean(r["output_tokens"] for r in rows),
@@ -188,37 +244,45 @@ def render_markdown(rows: list[dict], summary: dict, model: str) -> str:
         f"| Escalation precision | {summary['escalation_precision']:.0%} |",
         f"| Escalation recall | {summary['escalation_recall']:.0%} |",
         f"| Authorization violations | **{summary['authorization_violations']}** |",
-        f"| Avg steps / question | {summary['avg_steps']:.2f} |",
-        f"| Avg tokens / question (in + out) | {summary['avg_input_tokens']:.0f} + {summary['avg_output_tokens']:.0f} |",
-        f"| Avg latency / question | {summary['avg_latency_ms'] / 1000:.1f} s |",
+        f"| Multi-turn cases | {summary['multi_turn_cases']} of {summary['cases']} |",
+        f"| Avg steps / case | {summary['avg_steps']:.2f} |",
+        f"| Avg tokens / case (in + out) | {summary['avg_input_tokens']:.0f} + {summary['avg_output_tokens']:.0f} |",
+        f"| Avg latency / case | {summary['avg_latency_ms'] / 1000:.1f} s |",
         "",
-        "| Case | User | Expectation | Tools called | Steps | Result |",
-        "|---|---|---|---|---|---|",
+        "| Case | User | Turns | Expectation | Tools called | Steps | Result |",
+        "|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         status = "pass" if r["passed"] else f"FAIL ({r['note']})"
         tools = ", ".join(r["tools_used"]) or "-"
         if not r["tools_correct"]:
             tools += f" (expected {', '.join(r['expect_tools']) or 'none'})"
-        out.append(f"| {r['id']} | {r['user']} | {_expect_label(r['expect'])} | {tools} | {r['steps']} | {status} |")
+        out.append(
+            f"| {r['id']} | {r['user']} | {r['turns']} | {_expect_label(r['expect'])} "
+            f"| {tools} | {r['steps']} | {status} |"
+        )
     return "\n".join(out) + "\n"
 
 
 def print_table(rows: list[dict], summary: dict) -> None:
     w = max(len(r["id"]) for r in rows)
-    print(f"\n{'case':<{w}}  user  steps  tools                                   result")
+    print(f"\n{'case':<{w}}  user  turns  steps  tools                                   result")
     for r in rows:
         tools = ",".join(r["tools_used"]) or "-"
         mark = "PASS" if r["passed"] else "FAIL"
         note = f" - {r['note']}" if r["note"] else ""
         viol = f" !! {'; '.join(r['violations'])}" if r["violations"] else ""
-        print(f"{r['id']:<{w}}  {r['user']}  {r['steps']:>5}  {tools:<38}  {mark}{note}{viol}")
+        print(
+            f"{r['id']:<{w}}  {r['user']}  {r['turns']:>5}  {r['steps']:>5}  "
+            f"{tools:<38}  {mark}{note}{viol}"
+        )
     print()
     print(f"Task success rate:        {summary['task_success_rate']:.0%}")
     print(f"Tool-selection accuracy:  {summary['tool_selection_accuracy']:.0%}")
     print(f"Escalation precision:     {summary['escalation_precision']:.0%}")
     print(f"Escalation recall:        {summary['escalation_recall']:.0%}")
     print(f"Authorization violations: {summary['authorization_violations']}")
+    print(f"Multi-turn cases:         {summary['multi_turn_cases']} of {summary['cases']}")
     print(f"Avg steps:                {summary['avg_steps']:.2f}")
     print(f"Avg tokens (in + out):    {summary['avg_input_tokens']:.0f} + {summary['avg_output_tokens']:.0f}")
     print(f"Avg latency:              {summary['avg_latency_ms'] / 1000:.1f}s")
