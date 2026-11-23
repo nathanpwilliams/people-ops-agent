@@ -33,8 +33,10 @@ python -m agent.chat --user E004 # interactive CLI
 python scripts/seed.py          # rebuild data/company.db
 ```
 
-`python -m eval.run` calls the real API and costs money (~25 cases, roughly a dollar).
-It exits non-zero if any authorization violation is found. `pytest` never calls the API —
+`python -m eval.run` calls the real API and costs money (36 cases, roughly a dollar).
+It exits non-zero if any authorization violation is found. Each case runs against its
+own throwaway copy of the database, so a confirmed onboarding create cannot dirty
+`data/company.db` or couple cases to each other's order. `pytest` never calls the API —
 it runs against a fake client, so prefer it for iterating.
 
 Useful ids: `E004` Jordan Alvarez (engineer, no reports), `E002` Marcus Chen (VP
