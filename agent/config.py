@@ -16,5 +16,8 @@ OUTBOX_DIR = Path(os.environ.get("PEOPLE_OPS_OUTBOX_DIR", ROOT / "outbox"))
 
 MODEL = os.environ.get("PEOPLE_OPS_MODEL", "claude-opus-5-5")
 EFFORT = os.environ.get("PEOPLE_OPS_EFFORT", "medium")
+# The model that grades answer quality in eval/judge.py. Separate from MODEL so the
+# judge can be held fixed while the agent's model changes, or vice versa.
+JUDGE_MODEL = os.environ.get("PEOPLE_OPS_JUDGE_MODEL", "claude-opus-5-5")
 MAX_TOKENS = 16000
 MAX_STEPS = 8
